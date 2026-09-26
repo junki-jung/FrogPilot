@@ -2,6 +2,7 @@
 import json
 import math
 import shutil
+import subprocess
 import time
 
 from multiprocessing import Process
@@ -295,6 +296,12 @@ def save_log_schema(git_commit):
       shutil.copy(Path(CEREAL_PATH, name), staging_path / name)
 
     staging_path.rename(schema_path)
+
+
+def soft_reboot():
+  frogpilot_paths.BOOTED_PATH.touch()
+
+  subprocess.check_call(["sudo", "systemctl", "restart", "--no-block", "comma"])
 
 
 def sync_flag_file(flag_path, enabled):
