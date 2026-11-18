@@ -103,8 +103,10 @@ class CarController(CarControllerBase):
 
     # *** common hyundai stuff ***
 
+    scc_bus2_long = bool(self.CP.flags & HyundaiFlags.SCC_BUS2_LONG)
     # tester present - w/ no response (keeps relevant ECU disabled)
-    if self.frame % 100 == 0 and not (self.CP.flags & HyundaiFlags.CANFD_CAMERA_SCC.value) and self.CP.openpilotLongitudinalControl:
+    if (self.frame % 100 == 0 and self.CP.openpilotLongitudinalControl
+        and not (self.CP.flags & (HyundaiFlags.CANFD_CAMERA_SCC | HyundaiFlags.SCC_BUS2_LONG))):
       # for longitudinal control, either radar or ADAS driving ECU
       addr, bus = 0x7d0, 0
       if self.CP.flags & HyundaiFlags.CANFD_HDA2.value:
@@ -155,7 +157,13 @@ class CarController(CarControllerBase):
       if not self.CP.openpilotLongitudinalControl:
         can_sends.extend(self.create_button_messages(CC, CS, use_clu11=True))
 
-      if self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:
+      if self.frame % 2 == 0 and scc_bus2_long:
+        if CC.longActive and CS.out.canValid and CS.stock_scc_active and not CS.out.stockAeb and not CS.out.brakePressed:
+          can_sends.extend(hyundaican.create_bus2_acc_commands(
+            self.packer, CS.stock_scc11, CS.stock_scc12, CS.stock_scc14,
+            accel, stopping, set_speed_in_units, int(self.frame / 2),
+          ))
+      elif self.frame % 2 == 0 and self.CP.openpilotLongitudinalControl:
         # TODO: unclear if this is needed
         jerk = 3.0 if actuators.longControlState == LongCtrlState.pid else 1.0
         use_fca = self.CP.flags & HyundaiFlags.USE_FCA.value
@@ -169,11 +177,11 @@ class CarController(CarControllerBase):
         can_sends.append(hyundaican.create_lfahda_mfc(self.packer, lane_keep_active))
 
       # 5 Hz ACC options
-      if self.frame % 20 == 0 and self.CP.openpilotLongitudinalControl:
+      if self.frame % 20 == 0 and self.CP.openpilotLongitudinalControl and not scc_bus2_long:
         can_sends.extend(hyundaican.create_acc_opt(self.packer))
 
       # 2 Hz front radar options
-      if self.frame % 50 == 0 and self.CP.openpilotLongitudinalControl:
+      if self.frame % 50 == 0 and self.CP.openpilotLongitudinalControl and not scc_bus2_long:
         can_sends.append(hyundaican.create_frt_radar_opt(self.packer))
 
     new_actuators = actuators.as_builder()

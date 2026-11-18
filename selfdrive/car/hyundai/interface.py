@@ -95,6 +95,14 @@ class CarInterface(CarInterfaceBase):
         ret.longitudinalTuning.kiV = [0.0]
       ret.experimentalLongitudinalAvailable = candidate not in (UNSUPPORTED_LONGITUDINAL_CAR | CAMERA_SCC_CAR)
     ret.openpilotLongitudinalControl = experimental_long and ret.experimentalLongitudinalAvailable
+    if candidate == CAR.HYUNDAI_SANTA_FE and ret.openpilotLongitudinalControl:
+      stock_messages = (0x420, 0x421, 0x389, 0x38D, 0x483)
+      bus2 = fingerprint.get(2, {})
+      if all(bus2.get(addr) == 8 for addr in stock_messages) and not any(
+        addr in fingerprint.get(bus, {}) for bus in (0, 1) for addr in stock_messages[:3]
+      ):
+        ret.flags |= HyundaiFlags.SCC_BUS2_LONG.value
+
     ret.pcmCruise = not ret.openpilotLongitudinalControl
 
     ret.stoppingControl = True
@@ -136,6 +144,8 @@ class CarInterface(CarInterfaceBase):
 
     if ret.openpilotLongitudinalControl:
       ret.safetyConfigs[-1].safetyParam |= Panda.FLAG_HYUNDAI_LONG
+    if ret.flags & HyundaiFlags.SCC_BUS2_LONG:
+      ret.safetyConfigs[-1].safetyParam |= Panda.FLAG_HYUNDAI_SCC_BUS2_LONG
     if ret.flags & HyundaiFlags.HYBRID:
       ret.safetyConfigs[-1].safetyParam |= Panda.FLAG_HYUNDAI_HYBRID_GAS
     elif ret.flags & HyundaiFlags.EV:
@@ -155,7 +165,8 @@ class CarInterface(CarInterfaceBase):
 
   @staticmethod
   def init(CP, logcan, sendcan):
-    if CP.openpilotLongitudinalControl and not (CP.flags & HyundaiFlags.CANFD_CAMERA_SCC.value):
+    keep_stock_scc = CP.flags & (HyundaiFlags.CANFD_CAMERA_SCC | HyundaiFlags.SCC_BUS2_LONG)
+    if CP.openpilotLongitudinalControl and not keep_stock_scc:
       addr, bus = 0x7d0, 0
       if CP.flags & HyundaiFlags.CANFD_HDA2.value:
         addr, bus = 0x730, CanBus(CP).ECAN
