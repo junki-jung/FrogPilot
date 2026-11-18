@@ -126,12 +126,30 @@ RxCheck hyundai_legacy_lfa_button_rx_checks[] = {
   HYUNDAI_LFA_BUTTON_ADDR_CHECK
 };
 
+RxCheck hyundai_bus2_long_rx_checks[] = {
+  HYUNDAI_COMMON_RX_CHECKS(false)
+  {.msg = {{0x4F1, 0, 4, .max_counter = 15U, .frequency = 50U}, { 0 }, { 0 }}},
+  HYUNDAI_SCC11_ADDR_CHECK(2)
+  HYUNDAI_SCC12_ADDR_CHECK(2)
+  {.msg = {{0x389, 2, 8, .frequency = 50U}, { 0 }, { 0 }}},
+  {.msg = {{0x38D, 2, 8, .frequency = 50U}, { 0 }, { 0 }}},
+  {.msg = {{0x483, 2, 8, .frequency = 5U}, { 0 }, { 0 }}},
+};
+
 bool hyundai_legacy = false;
 
 // FrogPilot variables
 const int HYUNDAI_PARAM_LFA_BUTTON = 256;
 
 bool hyundai_lfa_button = false;
+const int HYUNDAI_PARAM_SCC_BUS2_LONG = 1024;
+const uint32_t HYUNDAI_BUS2_STOCK_TIMEOUT_US = 100000U;
+const uint32_t HYUNDAI_BUS2_FORWARD_TIMEOUT_US = 400000U;
+bool hyundai_scc_bus2_long = false;
+bool hyundai_bus2_stock_active = false;
+bool hyundai_bus2_own_scc = false;
+uint32_t hyundai_bus2_stock_ts = 0U;
+uint32_t hyundai_bus2_tx_ts = 0U;
 
 
 static uint8_t hyundai_get_counter(const CANPacket_t *to_push) {
@@ -209,6 +227,12 @@ static uint32_t hyundai_compute_checksum(const CANPacket_t *to_push) {
 static void hyundai_rx_hook(const CANPacket_t *to_push) {
   int bus = GET_BUS(to_push);
   int addr = GET_ADDR(to_push);
+
+  if (hyundai_scc_bus2_long && (bus == 2) && (addr == 0x421)) {
+    int cruise_mode = (GET_BYTES(to_push, 0, 4) >> 13) & 0x3U;
+    hyundai_bus2_stock_active = (cruise_mode == 1) || (cruise_mode == 2);
+    hyundai_bus2_stock_ts = microsecond_timer_get();
+  }
 
   // SCC12 is on bus 2 for camera-based SCC cars, bus 0 on all others
   if ((addr == 0x421) && (((bus == 0) && !hyundai_camera_scc) || ((bus == 2) && hyundai_camera_scc))) {
@@ -337,6 +361,28 @@ static bool hyundai_tx_hook(const CANPacket_t *to_send) {
     }
   }
 
+  if (hyundai_scc_bus2_long) {
+    uint32_t now = microsecond_timer_get();
+    bool stock_fresh = hyundai_bus2_stock_active &&
+                       (get_ts_elapsed(now, hyundai_bus2_stock_ts) < HYUNDAI_BUS2_STOCK_TIMEOUT_US);
+    if ((addr == 0x420) || (addr == 0x421) || (addr == 0x389)) {
+      tx = tx && (GET_BUS(to_send) == 0) && (GET_LEN(to_send) == 8) &&
+           controls_allowed && stock_fresh && !relay_malfunction;
+      if (tx && (addr == 0x421)) {
+        hyundai_bus2_own_scc = true;
+        hyundai_bus2_tx_ts = now;
+      }
+      if (addr != 0x421) {
+        tx = tx && hyundai_bus2_own_scc &&
+             (get_ts_elapsed(now, hyundai_bus2_tx_ts) < HYUNDAI_BUS2_STOCK_TIMEOUT_US);
+      }
+    }
+    if ((addr == 0x38D) || (addr == 0x483) || (addr == 0x50A) ||
+        (addr == 0x4A2) || (addr == 0x7D0)) {
+      tx = false;
+    }
+  }
+
   // BUTTONS: used for resume spamming and cruise cancellation
   if ((addr == 0x4F1) && !hyundai_longitudinal) {
     int button = GET_BYTE(to_send, 0) & 0x7U;
@@ -361,6 +407,15 @@ static int hyundai_fwd_hook(int bus_num, int addr) {
   }
   if ((bus_num == 2) && (addr != 0x340) && (addr != 0x485)) {
     bus_fwd = 0;
+  }
+
+  if (hyundai_scc_bus2_long && (bus_num == 2) && ((addr == 0x420) || (addr == 0x421) || (addr == 0x389))) {
+    if (get_ts_elapsed(microsecond_timer_get(), hyundai_bus2_tx_ts) >= HYUNDAI_BUS2_FORWARD_TIMEOUT_US) {
+      hyundai_bus2_own_scc = false;
+    }
+    if (hyundai_bus2_own_scc) {
+      bus_fwd = -1;
+    }
   }
 
   return bus_fwd;
@@ -396,12 +451,22 @@ static safety_config hyundai_init(uint16_t param) {
     }
   }
 
+  hyundai_scc_bus2_long = hyundai_longitudinal && GET_FLAG(param, HYUNDAI_PARAM_SCC_BUS2_LONG);
+  hyundai_bus2_stock_active = false;
+  hyundai_bus2_own_scc = false;
+  hyundai_bus2_stock_ts = 0U;
+  hyundai_bus2_tx_ts = 0U;
+  if (hyundai_scc_bus2_long) {
+    ret = BUILD_SAFETY_CFG(hyundai_bus2_long_rx_checks, HYUNDAI_LONG_TX_MSGS);
+  }
+
   return ret;
 }
 
 static safety_config hyundai_legacy_init(uint16_t param) {
   hyundai_common_init(param);
   hyundai_legacy = true;
+  hyundai_scc_bus2_long = false;
   hyundai_longitudinal = false;
   hyundai_camera_scc = false;
 

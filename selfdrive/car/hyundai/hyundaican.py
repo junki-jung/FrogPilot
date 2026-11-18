@@ -187,6 +187,20 @@ def create_acc_commands(packer, enabled, accel, upper_jerk, idx, hud_control, se
 
   return commands
 
+def create_bus2_acc_commands(packer, stock_scc11, stock_scc12, stock_scc14, accel, stopping, set_speed, counter):
+  scc11 = dict(stock_scc11, AliveCounterACC=counter % 16, VSetDis=set_speed)
+  scc12 = dict(stock_scc12, StopReq=int(stopping), aReqRaw=accel, aReqValue=accel,
+               CR_VSM_Alive=counter % 15, CR_VSM_ChkSum=0)
+  data = packer.make_can_msg("SCC12", 0, scc12)[2]
+  scc12["CR_VSM_ChkSum"] = (-sum(sum(divmod(byte, 16)) for byte in data)) % 16
+  scc14 = dict(stock_scc14, ACCMode=scc12["ACCMode"])
+  return [
+    packer.make_can_msg("SCC12", 0, scc12),
+    packer.make_can_msg("SCC11", 0, scc11),
+    packer.make_can_msg("SCC14", 0, scc14),
+  ]
+
+
 def create_acc_opt(packer):
   commands = []
 

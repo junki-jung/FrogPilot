@@ -68,6 +68,10 @@ class CarState(CarStateBase):
     self.buttons_counter = 0
 
     self.cruise_info = {}
+    self.stock_scc11 = None
+    self.stock_scc12 = None
+    self.stock_scc14 = None
+    self.stock_scc_active = False
 
     # On some cars, CLU15->CF_Clu_VehicleSpeed can oscillate faster than the dash updates. Sample at 5 Hz
     self.cluster_speed = 0
@@ -93,7 +97,25 @@ class CarState(CarStateBase):
 
     ret = car.CarState.new_message()
     fp_ret = custom.FrogPilotCarState.new_message()
-    cp_cruise = cp_cam if self.CP.carFingerprint in CAMERA_SCC_CAR else cp
+    scc_bus2_long = bool(self.CP.flags & HyundaiFlags.SCC_BUS2_LONG)
+    cp_cruise = cp_cam if scc_bus2_long or self.CP.carFingerprint in CAMERA_SCC_CAR else cp
+    if scc_bus2_long:
+      self.stock_scc11 = copy.copy(cp_cam.vl["SCC11"])
+      self.stock_scc12 = copy.copy(cp_cam.vl["SCC12"])
+      self.stock_scc14 = copy.copy(cp_cam.vl["SCC14"])
+      fca11 = cp_cam.vl["FCA11"]
+      self.stock_scc_active = (
+        cp_cam.can_valid
+        and self.stock_scc11["MainMode_ACC"] == 1
+        and self.stock_scc12["ACCMode"] in (1, 2)
+        and self.stock_scc12["ACCFailInfo"] == 0
+        and self.stock_scc12["AEB_CmdAct"] == 0
+        and self.stock_scc12["CF_VSM_DecCmdAct"] == 0
+        and fca11["FCA_CmdAct"] == 0
+        and fca11["CF_VSM_DecCmdAct"] == 0
+        and fca11["FCA_Failinfo"] == 0
+        and fca11["FCA_Status"] != 3
+      )
     self.is_metric = cp.vl["CLU11"]["CF_Clu_SPEED_UNIT"] == 0
     speed_conv = CV.KPH_TO_MS if self.is_metric else CV.MPH_TO_MS
 
@@ -180,7 +202,7 @@ class CarState(CarStateBase):
 
     ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(gear))
 
-    if not self.CP.openpilotLongitudinalControl:
+    if not self.CP.openpilotLongitudinalControl or scc_bus2_long:
       aeb_src = "FCA11" if self.CP.flags & HyundaiFlags.USE_FCA.value else "SCC12"
       aeb_sig = "FCA_CmdAct" if self.CP.flags & HyundaiFlags.USE_FCA.value else "AEB_CmdAct"
       aeb_warning = cp_cruise.vl[aeb_src]["CF_VSM_Warn"] != 0
@@ -422,7 +444,8 @@ class CarState(CarStateBase):
       ("LKAS11", 100)
     ]
 
-    if not CP.openpilotLongitudinalControl and CP.carFingerprint in CAMERA_SCC_CAR:
+    scc_bus2_long = bool(CP.flags & HyundaiFlags.SCC_BUS2_LONG)
+    if scc_bus2_long or (not CP.openpilotLongitudinalControl and CP.carFingerprint in CAMERA_SCC_CAR):
       messages += [
         ("SCC11", 50),
         ("SCC12", 50),
@@ -430,6 +453,8 @@ class CarState(CarStateBase):
 
       if CP.flags & HyundaiFlags.USE_FCA.value:
         messages.append(("FCA11", 50))
+      if scc_bus2_long:
+        messages.extend((("SCC14", 50), ("FCA12", 5)))
 
     if FPCP.fpFlags & HyundaiFrogPilotFlags.LKAS12:
       messages.append(("LKAS12", 10))

@@ -108,6 +108,7 @@ class HyundaiFlags(IntFlag):
   TCU_GEARS = 2 ** 22
 
   MIN_STEER_32_MPH = 2 ** 23
+  SCC_BUS2_LONG = 2 ** 24
 
 class HyundaiFrogPilotFlags(IntFlag):
   CAN_LFA_BTN = 1
